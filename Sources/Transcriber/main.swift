@@ -313,21 +313,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestMicAndStart() {
-        // LSUIElement apps don't have a dock icon, so the system
-        // permission prompt can appear behind other windows and the
-        // user never sees it — TCC silently records a denial and the
-        // app doesn't even show up in System Settings → Microphone.
-        // Bring us to the front first so the prompt is unmissable.
-        NSApp.activate(ignoringOtherApps: true)
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            startRecording()
 
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                guard granted else {
-                    self.alert("Microphone access denied. Open System Settings → Privacy & Security → Microphone and enable Arc Transcriber.")
-                    return
+        case .notDetermined:
+            // First time: trigger the system prompt. LSUIElement apps
+            // have no dock icon so the prompt can end up behind
+            // another window and get auto-dismissed — activate first
+            // to pull ourselves to the front.
+            NSApp.activate(ignoringOtherApps: true)
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    if granted { self.startRecording() }
+                    else { self.showMicDeniedAlert() }
                 }
-                self.startRecording()
+            }
+
+        case .denied, .restricted:
+            // TCC has recorded a prior denial (or MDM restricts this).
+            // Calling requestAccess again is a no-op — jump the user
+            // to Settings with a prefilled deep link instead.
+            showMicDeniedAlert()
+
+        @unknown default:
+            showMicDeniedAlert()
+        }
+    }
+
+    private func showMicDeniedAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Arc Transcriber needs microphone access"
+        alert.informativeText = "Enable Arc Transcriber in System Settings → Privacy & Security → Microphone, then come back and try again.\n\nIf Arc Transcriber doesn't appear in that list at all, open Terminal and run:\n    tccutil reset Microphone io.srcful.transcriber"
+        alert.addButton(withTitle: "Open Privacy & Security")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
             }
         }
     }
