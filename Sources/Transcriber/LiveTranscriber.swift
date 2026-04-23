@@ -36,22 +36,27 @@ final class LiveTranscriber {
         }
     }
 
-    func stop() {
+    /// Cancels the polling loop AND waits for any in-flight
+    /// `whisper.transcribe(audioArray:)` to return. WhisperKit shares
+    /// decoder state across calls on the same instance — kicking off
+    /// the final `transcribe(audioPath:)` while a live pass is still
+    /// running was corrupting results (final transcripts came back
+    /// empty or truncated to a single sentence).
+    func stop() async {
         task?.cancel()
+        await task?.value
         task = nil
-        Task { [buffer] in await buffer.clear() }
+        await buffer.clear()
     }
 
     private func transcribeOnce(language: String?) async {
         let snapshot = await buffer.snapshot()
         guard snapshot.count > sampleRate / 2 else { return }   // need at least 0.5 s
 
-        let options: DecodingOptions = {
-            if let language, language != "auto" {
-                return DecodingOptions(task: .transcribe, language: language, detectLanguage: false)
-            }
-            return DecodingOptions(task: .transcribe, detectLanguage: true)
-        }()
+        let options = AppDelegate.transcriptionOptions(
+            language: language ?? "auto",
+            live: true
+        )
 
         do {
             let results = try await whisper.transcribe(audioArray: snapshot, decodeOptions: options)

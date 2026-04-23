@@ -25,7 +25,14 @@ final class DiarizationRunner {
     private func loadIfNeeded() async throws -> DiarizerManager {
         if let d = diarizer { return d }
         let models = try await DiarizerModels.downloadIfNeeded()
-        let d = DiarizerManager()
+        // Single-mic recordings tend to collapse into one cluster at
+        // the default 0.7 (FluidAudio's own docs: "Lower = more
+        // speakers"). 0.6 nudges it toward splitting voices that sit
+        // near the threshold; bump further if very similar speakers
+        // still merge.
+        var config = DiarizerConfig()
+        config.clusteringThreshold = 0.6
+        let d = DiarizerManager(config: config)
         d.initialize(models: models)
         diarizer = d
         return d

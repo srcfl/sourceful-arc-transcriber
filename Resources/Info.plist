@@ -22,5 +22,16 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Transcriber records microphone audio for local transcription.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>io.srcful.transcriber.auth</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>sourceful-transcriber</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

@@ -98,7 +98,9 @@ struct FloatingControlView: View {
     }
 
     private var showMeters: Bool {
-        state.isRecording || state.isTranscribing
+        // Meters reflect live audio input — hide once we stop so they
+        // don't linger through the transcribe / upload phase.
+        state.isRecording
     }
 
     private var showLiveText: Bool {

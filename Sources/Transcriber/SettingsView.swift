@@ -1,7 +1,9 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var arcAuth: ArcAuthStore
 
     var body: some View {
         Form {
@@ -30,13 +32,84 @@ struct SettingsView: View {
             }
 
             Section("Arc") {
-                Text("Uploading transcripts to your Arc project — coming soon.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Picker("Environment", selection: $settings.arcEnvironment) {
+                    ForEach(ArcEnvironment.allCases) { env in
+                        Text(env.label).tag(env.rawValue)
+                    }
+                }
+                .disabled(arcAuth.isSignedIn)
+                .help(arcAuth.isSignedIn ? "Sign out to change the Arc environment." : "")
+
+                if settings.arcEnvironment == ArcEnvironment.other.rawValue {
+                    TextField("Custom base URL", text: $settings.arcBaseURL)
+                        .disabled(arcAuth.isSignedIn)
+                } else if let url = settings.arcWebURL {
+                    Text(url.absoluteString)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                if arcAuth.isSignedIn {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Signed in")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(arcAuth.userEmail ?? "(unknown account)")
+                                .font(.callout)
+                        }
+                        Spacer()
+                        Button("Sign out", role: .destructive) {
+                            arcAuth.signOut()
+                        }
+                    }
+
+                    Divider()
+
+                    Picker("Upload mode", selection: $settings.arcUploadMode) {
+                        ForEach(UploadMode.allCases) { m in
+                            Text(m.label).tag(m.rawValue)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+
+                    Text(uploadModeHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Button("Sign in to Arc") {
+                        openArcAuthorize()
+                    }
+                    .disabled(settings.arcWebURL == nil)
+                    Text("Opens Arc in your browser to authorize this app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 500, minHeight: 380)
+        .frame(minWidth: 520, minHeight: 500)
         .padding(.top, 8)
     }
+
+    private var uploadModeHelp: String {
+        switch UploadMode(rawValue: settings.arcUploadMode) ?? .inbox {
+        case .inbox:
+            return "Transcripts appear in your personal Arc inbox. Link them to a project or site from there."
+        case .ask:
+            return "After each recording, pick the project — or send it to your inbox to triage later."
+        case .skip:
+            return "Transcripts stay on this Mac. Upload manually from the transcripts window (soon)."
+        }
+    }
+
+    private func openArcAuthorize() {
+        guard let base = settings.arcWebURL else { return }
+        let target = base.appendingPathComponent("authorize-desktop")
+        NSWorkspace.shared.open(target)
+    }
 }
+

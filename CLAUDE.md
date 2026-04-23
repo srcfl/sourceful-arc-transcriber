@@ -75,10 +75,36 @@ The `Arc upload:` line is **placeholder** — the parser treats absence or `none
 
 ## Pending
 
-- **Arc backend upload.** The Settings window and transcript detail view both have `Upload to Arc` / `Uploading soon` placeholders wired in. Implementation needs: Arc API base URL, auth scheme, project-list endpoint, transcript-upload endpoint. Once live, update the `Arc upload:` header line on success and drop the warning for uploaded items.
 - **Persist floating pill position** across launches (currently snaps to top-right on every start).
 - **Global hotkey** for start/stop — small and high-leverage.
 
+## Releasing
+
+`.github/workflows/release.yml` mirrors the pattern from `srcful-nova-app`:
+commit-prefix versioning, build + sign + notarize on macos-14 runners,
+`softprops/action-gh-release` for the Release. See `RELEASING.md` for
+the day-to-day how-to.
+
+**Auto-update lives in `AutoUpdater.swift`.** It polls the repo's
+`/releases/latest` every 6 h, compares `tag_name` to the bundle's
+`CFBundleShortVersionString`, and on confirm downloads the asset zip,
+writes a small bash helper (`install.sh` under a temp dir) that waits
+for the current process to exit, swaps the `.app` bundles, and
+relaunches. No Sparkle, no appcast.xml — matches nova's pattern. The
+menu bar's "Check for updates…" item is a one-shot check; the
+periodic loop still runs either way.
+
+**Signing**: hardened runtime with `Resources/entitlements.plist`.
+WhisperKit + FluidAudio need `allow-unsigned-executable-memory` and
+`disable-library-validation` — both load CoreML models through
+Accelerate / Metal and hardened runtime blocks those by default.
+Ad-hoc signing (`build.sh`) is fine for local dev; CI signs with the
+Developer ID.
+
 ## Committing
 
-Default branch is `main`. No CI yet. Don't commit `.build/` or `build/` — `.gitignore` handles both, but verify `git status` is clean before adding. Never commit the HuggingFace model caches.
+Default branch is `main`. Commits with `patch:` / `minor:` / `major:`
+prefixes trigger a release build on push. Any other commit on main
+runs no CI (saves minutes). Don't commit `.build/` or `build/` — `.gitignore`
+handles both, but verify `git status` is clean before adding. Never
+commit the HuggingFace model caches.

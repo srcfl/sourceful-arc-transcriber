@@ -32,6 +32,7 @@ final class SystemAudioRecorder: NSObject, SCStreamDelegate, SCStreamOutput, @un
 
     private let levelLock = NSLock()
     private var _smoothedLevel: Float = 0
+    private var loggedFirstSample = false
 
     /// Smoothed 0…1 audio level. Safe to read from any thread.
     var currentLevel: Float {
@@ -55,7 +56,11 @@ final class SystemAudioRecorder: NSObject, SCStreamDelegate, SCStreamOutput, @un
         config.capturesAudio = true
         config.excludesCurrentProcessAudio = true
         config.sampleRate = 48_000
-        config.channelCount = 2
+        // Mono keeps RMS bookkeeping simple (one buffer in the
+        // AudioBufferList regardless of planar vs interleaved) and is
+        // enough for a level meter — stereo layouts had the right
+        // channel's level silently dropped.
+        config.channelCount = 1
         // We're not using video; keep it tiny and slow.
         config.width = 2
         config.height = 2
@@ -71,7 +76,7 @@ final class SystemAudioRecorder: NSObject, SCStreamDelegate, SCStreamOutput, @un
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatLinearPCM),
             AVSampleRateKey: 48_000,
-            AVNumberOfChannelsKey: 2,
+            AVNumberOfChannelsKey: 1,
             AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsFloatKey: false,
             AVLinearPCMIsBigEndianKey: false,
@@ -95,6 +100,7 @@ final class SystemAudioRecorder: NSObject, SCStreamDelegate, SCStreamOutput, @un
             self.input = newInput
             self.outputURL = url
             self.sessionStarted = false
+            self.loggedFirstSample = false
         }
 
         try await newStream.startCapture()
@@ -141,6 +147,11 @@ final class SystemAudioRecorder: NSObject, SCStreamDelegate, SCStreamOutput, @un
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         // Delivered on `queue`.
         guard type == .audio, sampleBuffer.isValid else { return }
+        if !loggedFirstSample {
+            loggedFirstSample = true
+            let n = CMSampleBufferGetNumSamples(sampleBuffer)
+            NSLog("[SystemAudio] First audio sample received (%d frames)", n)
+        }
         if !sessionStarted {
             writer?.startSession(atSourceTime: sampleBuffer.presentationTimeStamp)
             sessionStarted = true

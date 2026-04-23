@@ -18,6 +18,7 @@ enum Speaker: Hashable {
 struct SpeakerLine {
     let speaker: Speaker
     let start: Float
+    let end: Float
     let text: String
 }
 
@@ -40,14 +41,30 @@ enum TranscriptMerger {
         turns: [SpeakerTurn]
     ) -> String {
         let labelMap = renumber(turns)
+        // Sorted + min/max are used below to distinguish legitimate
+        // inter-turn gaps (keep, label "Speaker ?") from trailing or
+        // leading hallucinations (drop). With our loosened Whisper
+        // thresholds, Whisper happily emits a "Tack tack tack …" kind
+        // of line on the quiet tail after Stop — the diarizer gives
+        // us the authoritative speech range to clip against.
+        let firstTurnStart = turns.map(\.start).min() ?? 0
+        let lastTurnEnd = turns.map(\.end).max() ?? 0
+        let tolerance: Float = 0.5   // allow half a second of drift at the edges
+
         var lines: [SpeakerLine] = []
         for result in whisper {
             for seg in result.segments {
-                let text = seg.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let text = stripWhisperTokens(seg.text)
                 guard !text.isEmpty else { continue }
+
                 let id = bestSpeakerID(forStart: seg.start, end: seg.end, in: turns)
+                if id == nil {
+                    let outsideRange = seg.end < firstTurnStart - tolerance
+                                    || seg.start > lastTurnEnd + tolerance
+                    if outsideRange { continue }  // drop — hallucination before / after any speech
+                }
                 let label = id.flatMap { labelMap[$0] } ?? "Speaker ?"
-                lines.append(SpeakerLine(speaker: .named(label), start: seg.start, text: text))
+                lines.append(SpeakerLine(speaker: .named(label), start: seg.start, end: seg.end, text: text))
             }
         }
         return format(lines.sorted { $0.start < $1.start })
@@ -55,7 +72,25 @@ enum TranscriptMerger {
 
     static func formatSingleSpeaker(_ results: [TranscriptionResult]) -> String {
         results.map(\.text)
+            .map(stripWhisperTokens)
             .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Belt-and-braces cleanup for Whisper special tokens like
+    /// `<|startoftranscript|>`, `<|sv|>`, `<|transcribe|>`, and
+    /// timestamp markers like `<|12.48|>`. With
+    /// `DecodingOptions(skipSpecialTokens: true)` these shouldn't
+    /// appear, but WhisperKit occasionally leaves fragments for some
+    /// language / model combos — strip them defensively.
+    static func stripWhisperTokens(_ text: String) -> String {
+        let cleaned = text.replacingOccurrences(
+            of: #"<\|[^|<>]*\|>"#,
+            with: " ",
+            options: .regularExpression
+        )
+        return cleaned
+            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -67,7 +102,8 @@ enum TranscriptMerger {
                 SpeakerLine(
                     speaker: speaker,
                     start: seg.start,
-                    text: seg.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    end: seg.end,
+                    text: stripWhisperTokens(seg.text)
                 )
             }
         }
@@ -106,20 +142,23 @@ enum TranscriptMerger {
         var blocks: [String] = []
         var currentSpeaker: Speaker?
         var currentStart: Float = 0
+        var currentEnd: Float = 0
         var currentText = ""
 
         func flush() {
             guard let s = currentSpeaker, !currentText.isEmpty else { return }
-            blocks.append("**\(s.label)** [\(timeLabel(currentStart))] \(currentText)")
+            blocks.append("**\(s.label)** [\(timeLabel(currentStart))–\(timeLabel(currentEnd))] \(currentText)")
         }
 
         for line in lines {
             if line.speaker == currentSpeaker {
                 currentText += " " + line.text
+                currentEnd = max(currentEnd, line.end)
             } else {
                 flush()
                 currentSpeaker = line.speaker
                 currentStart = line.start
+                currentEnd = line.end
                 currentText = line.text
             }
         }

@@ -14,7 +14,12 @@ struct TranscriptsView: View {
                         Text(item.title)
                             .font(.system(.body, design: .monospaced))
                             .lineLimit(1)
-                        if !item.uploadedToArc {
+                        if item.uploadedToArc {
+                            Image(systemName: "icloud.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.blue)
+                                .help("Uploaded to Arc")
+                        } else {
                             Image(systemName: "icloud.slash")
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
