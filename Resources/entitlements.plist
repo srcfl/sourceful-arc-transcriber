@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required by WhisperKit + FluidAudio: both load CoreML models
+         at runtime via Apple's Accelerate / Metal frameworks.
+         Hardened runtime refuses this without the flag. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Arc API calls + GitHub Releases polling for auto-update. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

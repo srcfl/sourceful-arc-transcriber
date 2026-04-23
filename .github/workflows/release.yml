@@ -1,0 +1,255 @@
+name: Build & Release
+
+# Commit-prefix versioning (matches the srcful-nova-app pattern):
+#
+#   patch: fix X         → bumps patch (0.1.0 → 0.1.1)
+#   minor: add X         → bumps minor (0.1.1 → 0.2.0)
+#   major: rewrite X     → bumps major (0.2.0 → 1.0.0)
+#
+# Any other commit on main builds nothing (CI validation only via the
+# local `swift build` that runs on the developer's machine).
+#
+# Can also be triggered manually via `workflow_dispatch` with explicit
+# release_type + title.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type (patch, minor, major)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      release_title:
+        description: 'Release title'
+        required: true
+        default: 'Manual release'
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Decide whether this is a release commit, compute the new version
+  # ------------------------------------------------------------------
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      release_type:   ${{ steps.check.outputs.release_type }}
+      release_title:  ${{ steps.check.outputs.release_title }}
+      release_body:   ${{ steps.check.outputs.release_body }}
+      version:        ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for tags
+
+      - name: Parse commit message for release prefix
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_release=true"   >> "$GITHUB_OUTPUT"
+            echo "release_type=${{ github.event.inputs.release_type }}" >> "$GITHUB_OUTPUT"
+            echo "release_title=${{ github.event.inputs.release_title }}" >> "$GITHUB_OUTPUT"
+            echo "release_body=" >> "$GITHUB_OUTPUT"
+          else
+            COMMIT_MSG=$(git log -1 --pretty=%B)
+            FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1)
+
+            if   [[ "$FIRST_LINE" =~ ^patch:\ ?(.+)$ ]]; then
+              echo "should_release=true"  >> "$GITHUB_OUTPUT"
+              echo "release_type=patch"   >> "$GITHUB_OUTPUT"
+              echo "release_title=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            elif [[ "$FIRST_LINE" =~ ^minor:\ ?(.+)$ ]]; then
+              echo "should_release=true"  >> "$GITHUB_OUTPUT"
+              echo "release_type=minor"   >> "$GITHUB_OUTPUT"
+              echo "release_title=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            elif [[ "$FIRST_LINE" =~ ^major:\ ?(.+)$ ]]; then
+              echo "should_release=true"  >> "$GITHUB_OUTPUT"
+              echo "release_type=major"   >> "$GITHUB_OUTPUT"
+              echo "release_title=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+              echo "release_type="        >> "$GITHUB_OUTPUT"
+              echo "release_title="       >> "$GITHUB_OUTPUT"
+            fi
+
+            # Commit body (everything after line 1), minus Co-Authored-By
+            # lines, collapsed of trailing empty lines.
+            COMMIT_BODY=$(echo "$COMMIT_MSG" \
+              | tail -n +2 \
+              | sed '/^Co-Authored-By:/d' \
+              | sed -e :a -e '/^\s*$/d;N;ba' || true)
+            DELIM="EOF_$(date +%s%N)"
+            {
+              echo "release_body<<$DELIM"
+              echo "$COMMIT_BODY"
+              echo "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump version
+        id: version
+        if: steps.check.outputs.should_release == 'true'
+        run: |
+          git fetch --tags --force
+          LATEST_TAG=$(git tag --sort=-v:refname | head -1)
+          [ -z "$LATEST_TAG" ] && LATEST_TAG="v0.0.0"
+          echo "Latest tag: $LATEST_TAG"
+
+          VERSION=${LATEST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
+
+          case "${{ steps.check.outputs.release_type }}" in
+            major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH+1)) ;;
+          esac
+
+          NEW="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------
+  # 2. Build + sign + notarize on macOS, ship a zipped .app
+  # ------------------------------------------------------------------
+  build-macos:
+    needs: check-release
+    if: needs.check-release.outputs.should_release == 'true'
+    runs-on: macos-14       # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE_BASE64:   ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Build + bundle
+        env:
+          VERSION: ${{ needs.check-release.outputs.version }}
+        run: |
+          set -e
+          swift build -c release
+
+          APP="build/Transcriber.app"
+          rm -rf build
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp ".build/release/Transcriber" "$APP/Contents/MacOS/Transcriber"
+
+          # Inject the version into a copy of Info.plist.
+          /usr/libexec/PlistBuddy -x -c "Print" "Resources/Info.plist" > "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}"            "$APP/Contents/Info.plist"
+
+      - name: Sign with hardened runtime
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -e
+          APP="build/Transcriber.app"
+          IDENTITY="Developer ID Application: Sourceful Labs AB (${APPLE_TEAM_ID})"
+
+          # Sign any embedded frameworks / dylibs first (WhisperKit +
+          # FluidAudio ship CoreML / Metal dependencies).
+          find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 \
+            | xargs -0 -I{} codesign --force --options runtime --sign "$IDENTITY" \
+                --entitlements Resources/entitlements.plist "{}" || true
+
+          # Main executable
+          codesign --force --options runtime --sign "$IDENTITY" \
+            --entitlements Resources/entitlements.plist \
+            "$APP/Contents/MacOS/Transcriber"
+
+          # App bundle (applies to everything recursively)
+          codesign --force --deep --options runtime --sign "$IDENTITY" \
+            --entitlements Resources/entitlements.plist \
+            "$APP"
+
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Notarize
+        env:
+          APPLE_ID:           ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID:      ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -e
+          APP="build/Transcriber.app"
+          ditto -c -k --keepParent "$APP" build/notarize.zip
+
+          xcrun notarytool submit build/notarize.zip \
+            --apple-id      "$APPLE_ID" \
+            --team-id       "$APPLE_TEAM_ID" \
+            --password      "$APPLE_APP_PASSWORD" \
+            --wait
+
+          xcrun stapler staple "$APP"
+          spctl --assess --type execute --verbose "$APP"
+
+      - name: Package release zip
+        env:
+          VERSION: ${{ needs.check-release.outputs.version }}
+        run: |
+          set -e
+          cd build
+          ZIP_NAME="Transcriber-${VERSION}-macos-arm64.zip"
+          ditto -c -k --keepParent "Transcriber.app" "$ZIP_NAME"
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: transcriber-macos
+          path: build/${{ env.ZIP_NAME }}
+
+  # ------------------------------------------------------------------
+  # 3. Tag + create the GitHub Release with the built asset
+  # ------------------------------------------------------------------
+  release:
+    needs: [check-release, build-macos]
+    if: needs.check-release.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: transcriber-macos
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-release.outputs.version }}
+          name: v${{ needs.check-release.outputs.version }} — ${{ needs.check-release.outputs.release_title }}
+          body: ${{ needs.check-release.outputs.release_body }}
+          files: artifacts/*.zip
+          draft: false
+          prerelease: false
