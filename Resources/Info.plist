@@ -10,6 +10,8 @@
     <string>Transcriber</string>
     <key>CFBundleDisplayName</key>
     <string>Transcriber</string>
+    <key>CFBundleIconFile</key>
+    <string>iconfile</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>

@@ -175,6 +175,11 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}"            "$APP/Contents/Info.plist"
 
+          # Bundle icon
+          if [[ -f Resources/iconfile.icns ]]; then
+              cp Resources/iconfile.icns "$APP/Contents/Resources/iconfile.icns"
+          fi
+
       - name: Sign with hardened runtime
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
