@@ -12,5 +12,15 @@
     <!-- Arc API calls + GitHub Releases polling for auto-update. -->
     <key>com.apple.security.network.client</key>
     <true/>
+    <!-- Explicit mic entitlement. For non-sandboxed hardened-runtime
+         apps this wasn't historically required — TCC was supposed to
+         gate mic access purely off NSMicrophoneUsageDescription. On
+         macOS 15+ we observed signed / notarized / quarantine-clean
+         installs where `AVCaptureDevice.requestAccess` still returned
+         denied *and* the app never appeared in System Settings →
+         Microphone. Adding this flag is what makes TCC register the
+         request and show the prompt. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

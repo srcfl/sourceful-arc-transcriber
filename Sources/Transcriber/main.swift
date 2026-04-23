@@ -313,7 +313,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestMicAndStart() {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        NSLog("[Mic] authorizationStatus = %@", String(describing: status))
+
+        switch status {
         case .authorized:
             startRecording()
 
@@ -323,7 +326,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // another window and get auto-dismissed — activate first
             // to pull ourselves to the front.
             NSApp.activate(ignoringOtherApps: true)
+            NSLog("[Mic] Calling AVCaptureDevice.requestAccess(.audio)")
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                NSLog("[Mic] requestAccess callback: granted = %d", granted ? 1 : 0)
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     if granted { self.startRecording() }
