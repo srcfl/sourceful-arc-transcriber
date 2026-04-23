@@ -66,7 +66,7 @@ struct FloatingControlView: View {
             Menu {
                 Button("Show Transcriptions…") { state.onShowTranscripts() }
                 Divider()
-                Button("Quit Transcriber") { NSApp.terminate(nil) }
+                Button("Quit Arc Transcriber") { NSApp.terminate(nil) }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 14))
@@ -90,7 +90,7 @@ struct FloatingControlView: View {
 
     private var primaryLabel: String {
         if state.isTranscribing { return "Transcribing…" }
-        return state.isRecording ? "Recording" : "Transcriber"
+        return state.isRecording ? "Recording" : "Arc Transcriber"
     }
 
     private var secondaryLabel: String? {

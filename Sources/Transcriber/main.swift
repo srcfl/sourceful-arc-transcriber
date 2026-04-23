@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if !self.updater.updateAvailable {
                     let alert = NSAlert()
                     alert.messageText = "You're up to date"
-                    alert.informativeText = "Sourceful Arc Transcriber \(self.updater.currentVersion) is the latest release."
+                    alert.informativeText = "Arc Transcriber \(self.updater.currentVersion) is the latest release."
                     alert.runModal()
                 }
             }
@@ -190,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let hosting = NSHostingController(rootView: SettingsView(settings: settings, arcAuth: arcAuth))
             hosting.sizingOptions = [.preferredContentSize]
             let window = NSWindow(contentViewController: hosting)
-            window.title = "Transcriber Settings"
+            window.title = "Arc Transcriber Settings"
             window.styleMask = [.titled, .closable, .miniaturizable]
             window.isReleasedWhenClosed = false
             window.center()
@@ -241,7 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             symbol = "waveform"
         }
-        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Transcriber") {
+        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Arc Transcriber") {
             image.isTemplate = true
             button.image = image
             button.title = ""
@@ -313,11 +313,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestMicAndStart() {
+        // LSUIElement apps don't have a dock icon, so the system
+        // permission prompt can appear behind other windows and the
+        // user never sees it — TCC silently records a denial and the
+        // app doesn't even show up in System Settings → Microphone.
+        // Bring us to the front first so the prompt is unmissable.
+        NSApp.activate(ignoringOtherApps: true)
+
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 guard granted else {
-                    self.alert("Microphone access denied. Enable it in System Settings → Privacy & Security → Microphone.")
+                    self.alert("Microphone access denied. Open System Settings → Privacy & Security → Microphone and enable Arc Transcriber.")
                     return
                 }
                 self.startRecording()
@@ -891,7 +898,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func alert(_ message: String) {
         let a = NSAlert()
-        a.messageText = "Transcriber"
+        a.messageText = "Arc Transcriber"
         a.informativeText = message
         a.alertStyle = .warning
         a.runModal()

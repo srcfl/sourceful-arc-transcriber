@@ -2,14 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Display name stays "Arc Transcriber"; bundle identifier and
+         CFBundleExecutable intentionally stay as `*.transcriber` /
+         `Transcriber` so existing v0.0.1 installs keep their TCC /
+         Keychain grants and the auto-updater can still find them by
+         bundle id. -->
     <key>CFBundleExecutable</key>
     <string>Transcriber</string>
     <key>CFBundleIdentifier</key>
     <string>io.srcful.transcriber</string>
     <key>CFBundleName</key>
-    <string>Transcriber</string>
+    <string>Arc Transcriber</string>
     <key>CFBundleDisplayName</key>
-    <string>Transcriber</string>
+    <string>Arc Transcriber</string>
     <key>CFBundleIconFile</key>
     <string>iconfile</string>
     <key>CFBundleShortVersionString</key>
@@ -22,8 +27,10 @@
     <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Transcriber records microphone audio for local transcription.</string>
+    <string>Arc Transcriber records microphone audio locally to transcribe meetings and voice notes.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
