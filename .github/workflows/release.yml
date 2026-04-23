@@ -261,24 +261,28 @@ jobs:
           DMG_NAME="Arc-Transcriber-${VERSION}-macos-arm64.dmg"
           DMG="build/${DMG_NAME}"
           TMP_DMG="build/temp.dmg"
+          STAGE="build/dmg-staging"
           VOL_NAME="Arc Transcriber"
 
-          # 1. Writable staging DMG — 200 MB is plenty for the app
-          #    plus background (~60 KB).
-          hdiutil create -size 200m -fs HFS+ \
+          # 1. Stage the volume contents first — hdiutil's `-format
+          #    UDRW` needs `-srcfolder` / `-srcdevice` (can't create
+          #    empty writable images).
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/.background"
+          cp -R "$APP" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          cp Resources/dmg-background.png "$STAGE/.background/background.png"
+
+          # 2. Writable DMG from the staging folder, mount it.
+          hdiutil create -srcfolder "$STAGE" \
             -volname "$VOL_NAME" \
+            -fs HFS+ \
             -format UDRW \
             -ov "$TMP_DMG"
 
-          # 2. Mount + copy app + symlink + background image
           MOUNT=$(hdiutil attach "$TMP_DMG" -nobrowse -noverify -noautoopen \
             | egrep -o '/Volumes/.*$' | head -1)
           echo "Mounted at: $MOUNT"
-
-          cp -R "$APP" "$MOUNT/"
-          ln -s /Applications "$MOUNT/Applications"
-          mkdir "$MOUNT/.background"
-          cp Resources/dmg-background.png "$MOUNT/.background/background.png"
 
           # 3. Finder layout — script lives in tools/ so the YAML
           #    block doesn't have to deal with heredoc indentation.
@@ -291,6 +295,7 @@ jobs:
           # 4. Compress to read-only UDZO
           hdiutil convert "$TMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG"
           rm "$TMP_DMG"
+          rm -rf "$STAGE"
 
           # 5. Sign, notarize, staple
           codesign --force --sign "$IDENTITY" "$DMG"
