@@ -1,0 +1,46 @@
+<svg width="1280" height="800" viewBox="0 0 1280 800"
+     xmlns="http://www.w3.org/2000/svg">
+    <!-- Sourceful-editorial DMG background (2x retina).
+         Window shows at 640x400, so source is 2x. Layout:
+
+             (app icon at 128,260)        (Applications at 388,260)
+
+         The design is a paper ground with an ample orange arrow
+         between the two icon positions, plus a short instruction
+         line. No gradients / no glow / no ornamental shadows — one
+         ground, one accent, per the Sourceful system. -->
+
+    <rect width="1280" height="800" fill="#FAFAF7"/>
+
+    <!-- "Drag to install" title at the top, ink on paper.
+         Cap height roughly matches Satoshi display. -->
+    <text x="640" y="150" text-anchor="middle"
+          font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif"
+          font-weight="700" font-size="48" fill="#0A0A0A"
+          letter-spacing="-1">
+        Drag Arc Transcriber to Applications
+    </text>
+
+    <!-- Orange arrow between the icon positions.
+         App icon centered at (256, 520) in 2x; Applications at (776, 520).
+         The arrow sits between, at y ≈ 540. -->
+    <g transform="translate(360 470)" fill="#E85D1F">
+        <!-- Shaft -->
+        <rect x="0" y="62" width="420" height="36" rx="8" ry="8"/>
+        <!-- Head: a tidy triangle, no extra ornamentation -->
+        <polygon points="420,20 560,80 420,140"/>
+    </g>
+
+    <!-- Minimal brand footer. Tiny bolt glyph + wordmark, bottom-centre. -->
+    <g transform="translate(540 700)" fill="#0A0A0A" opacity="0.4">
+        <!-- Sourceful bolt, taken from sourceful-icon.svg, scaled. -->
+        <g transform="scale(1.4)">
+            <path d="M27.2275 7.67578C27.541 6.21313 25.6892 5.31248 24.7422 6.4668L11.4863 22.6338C10.6453 23.66 11.5339 25.1827 12.8359 24.9463L18.9971 23.8281C20.0412 23.6386 20.9163 24.6237 20.6104 25.6445L16.6934 38.7109C16.2552 40.1724 18.0973 41.2124 19.1113 40.0762L33.9912 23.3945C34.8443 22.4378 34.1042 20.9238 32.8291 21.0176L26.125 21.5107C25.1794 21.5803 24.4323 20.7175 24.6318 19.7861L27.2275 7.67578Z"/>
+        </g>
+        <text x="80" y="32"
+              font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif"
+              font-weight="600" font-size="24" letter-spacing="1">
+            SOURCEFUL
+        </text>
+    </g>
+</svg>

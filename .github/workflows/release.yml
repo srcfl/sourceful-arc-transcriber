@@ -244,32 +244,74 @@ jobs:
           APPLE_TEAM_ID:      ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID:           ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        # When users download a .zip from a browser macOS tags the
-        # extracted .app with `com.apple.quarantine`, and on recent
-        # macOS that attribute can block TCC from ever prompting for
-        # microphone access — even with hardened-runtime + notarization
-        # correct. Distributing a signed, notarized, stapled DMG +
-        # drag-to-Applications flow is Apple's canonical install path;
-        # it clears quarantine properly through Gatekeeper.
+        # Two-stage DMG build so we can customise the install window
+        # (background image + icon positions via AppleScript):
+        #   1. Create a writable UDRW DMG, mount it.
+        #   2. Copy the app + /Applications symlink + background, then
+        #      tell Finder via osascript to place icons where we want.
+        #   3. Unmount, compress to UDZO, sign, notarize, staple.
+        #
+        # The RW-stage window layout lives in the volume's .DS_Store;
+        # AppleScript writes that for us. First launch of the mounted
+        # DMG on a user's Mac replays the same layout.
         run: |
           set -e
           IDENTITY="Developer ID Application: Sourceful Labs AB (${APPLE_TEAM_ID})"
           APP="build/Arc Transcriber.app"
           DMG_NAME="Arc-Transcriber-${VERSION}-macos-arm64.dmg"
           DMG="build/${DMG_NAME}"
-          STAGE="build/dmg-staging"
+          TMP_DMG="build/temp.dmg"
+          VOL_NAME="Arc Transcriber"
 
-          rm -rf "$STAGE"
-          mkdir -p "$STAGE"
-          cp -R "$APP" "$STAGE/"
-          ln -s /Applications "$STAGE/Applications"
+          # 1. Writable staging DMG — 200 MB is plenty for the app
+          #    plus background (~60 KB).
+          hdiutil create -size 200m -fs HFS+ \
+            -volname "$VOL_NAME" \
+            -format UDRW \
+            -ov "$TMP_DMG"
 
-          hdiutil create \
-            -volname "Arc Transcriber" \
-            -srcfolder "$STAGE" \
-            -ov -format UDZO \
-            "$DMG"
+          # 2. Mount + copy app + symlink + background image
+          MOUNT=$(hdiutil attach "$TMP_DMG" -nobrowse -noverify -noautoopen \
+            | egrep -o '/Volumes/.*$' | head -1)
+          echo "Mounted at: $MOUNT"
 
+          cp -R "$APP" "$MOUNT/"
+          ln -s /Applications "$MOUNT/Applications"
+          mkdir "$MOUNT/.background"
+          cp Resources/dmg-background.png "$MOUNT/.background/background.png"
+
+          # 3. Finder layout — 640×400 window, icons at positions that
+          #    frame the background arrow.
+          osascript <<APPLESCRIPT
+          tell application "Finder"
+              tell disk "$VOL_NAME"
+                  open
+                  set current view of container window to icon view
+                  set toolbar visible of container window to false
+                  set statusbar visible of container window to false
+                  set the bounds of container window to {400, 150, 1040, 550}
+                  set viewOptions to the icon view options of container window
+                  set arrangement of viewOptions to not arranged
+                  set icon size of viewOptions to 128
+                  set background picture of viewOptions to file ".background:background.png"
+                  set position of item "Arc Transcriber.app" of container window to {128, 260}
+                  set position of item "Applications" of container window to {388, 260}
+                  update without registering applications
+                  delay 1
+                  close
+              end tell
+          end tell
+APPLESCRIPT
+
+          # Flush and unmount
+          sync
+          hdiutil detach "$MOUNT"
+
+          # 4. Compress to read-only UDZO
+          hdiutil convert "$TMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG"
+          rm "$TMP_DMG"
+
+          # 5. Sign, notarize, staple
           codesign --force --sign "$IDENTITY" "$DMG"
 
           xcrun notarytool submit "$DMG" \

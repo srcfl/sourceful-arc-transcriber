@@ -23,8 +23,11 @@ struct FloatingControlView: View {
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
+            // Ink-tinted hairline in place of the system-grey separator
+            // — reads as editorial rather than "inherit whatever the
+            // OS handed me".
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(.separator.opacity(0.6), lineWidth: 0.5)
+                .strokeBorder(SourcefulColor.ink.opacity(0.12), lineWidth: 0.5)
         )
         .animation(.easeInOut(duration: 0.2), value: showLiveText)
     }
@@ -47,7 +50,7 @@ struct FloatingControlView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.primary)
                     if showMeters {
-                        LevelMeterView(level: state.micLevel, tint: .yellow)
+                        LevelMeterView(level: state.micLevel, tint: SourcefulColor.signal)
                             .help("Your microphone")
                         LevelMeterView(level: state.systemLevel, tint: .purple)
                             .help("System audio (other participants)")
@@ -85,7 +88,9 @@ struct FloatingControlView: View {
 
     private var iconColor: Color {
         if state.isTranscribing { return .secondary }
-        return state.isRecording ? .red : .primary
+        // Sourceful's single accent — signal orange — replaces
+        // system red for the recording state.
+        return state.isRecording ? SourcefulColor.signal : .primary
     }
 
     private var primaryLabel: String {

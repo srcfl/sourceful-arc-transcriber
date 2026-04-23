@@ -849,14 +849,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let hosting = NSHostingController(rootView: FloatingControlView(state: state))
             hosting.sizingOptions = [.preferredContentSize]
             let size = NSSize(width: 280, height: 52)
+            // Borderless + nonactivating: no chrome, no titlebar
+            // separator line across the top — the content view fills
+            // every pixel. Without .titled there are no traffic-light
+            // buttons to hide and no title to suppress.
             let panel = NSPanel(
                 contentRect: NSRect(origin: .zero, size: size),
-                styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView, .utilityWindow],
+                styleMask: [.nonactivatingPanel, .borderless],
                 backing: .buffered,
                 defer: false
             )
-            panel.titleVisibility = .hidden
-            panel.titlebarAppearsTransparent = true
             panel.isMovableByWindowBackground = true
             panel.backgroundColor = .clear
             panel.hasShadow = true
@@ -866,9 +868,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.hidesOnDeactivate = false
             panel.contentViewController = hosting
             panel.setContentSize(size)
-            panel.standardWindowButton(.closeButton)?.isHidden = true
-            panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-            panel.standardWindowButton(.zoomButton)?.isHidden = true
 
             // Top-right corner of the main screen, a bit below the menu bar.
             if let screen = NSScreen.main {
