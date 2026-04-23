@@ -165,8 +165,11 @@ jobs:
           set -e
           swift build -c release
 
-          APP="build/Transcriber.app"
+          # Bundle directory renamed to "Arc Transcriber.app" so Finder
+          # labels it correctly. CFBundleExecutable stays "Transcriber"
+          # (matches the SPM target binary name).
           rm -rf build
+          APP="build/Arc Transcriber.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp ".build/release/Transcriber" "$APP/Contents/MacOS/Transcriber"
 
@@ -185,7 +188,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -e
-          APP="build/Transcriber.app"
+          APP="build/Arc Transcriber.app"
           IDENTITY="Developer ID Application: Sourceful Labs AB (${APPLE_TEAM_ID})"
 
           # Sign any embedded frameworks / dylibs first (WhisperKit +
@@ -206,14 +209,14 @@ jobs:
 
           codesign --verify --deep --strict --verbose=2 "$APP"
 
-      - name: Notarize
+      - name: Notarize .app
         env:
           APPLE_ID:           ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID:      ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -e
-          APP="build/Transcriber.app"
+          APP="build/Arc Transcriber.app"
           ditto -c -k --keepParent "$APP" build/notarize.zip
 
           xcrun notarytool submit build/notarize.zip \
@@ -225,20 +228,67 @@ jobs:
           xcrun stapler staple "$APP"
           spctl --assess --type execute --verbose "$APP"
 
-      - name: Package release zip
+      - name: Package zip (used by the in-app auto-updater)
         env:
           VERSION: ${{ needs.check-release.outputs.version }}
         run: |
           set -e
           cd build
-          ZIP_NAME="Transcriber-${VERSION}-macos-arm64.zip"
-          ditto -c -k --keepParent "Transcriber.app" "$ZIP_NAME"
+          ZIP_NAME="Arc-Transcriber-${VERSION}-macos-arm64.zip"
+          ditto -c -k --keepParent "Arc Transcriber.app" "$ZIP_NAME"
           echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - name: Package .dmg (first-install installer, handles quarantine)
+        env:
+          VERSION:            ${{ needs.check-release.outputs.version }}
+          APPLE_TEAM_ID:      ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID:           ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        # When users download a .zip from a browser macOS tags the
+        # extracted .app with `com.apple.quarantine`, and on recent
+        # macOS that attribute can block TCC from ever prompting for
+        # microphone access — even with hardened-runtime + notarization
+        # correct. Distributing a signed, notarized, stapled DMG +
+        # drag-to-Applications flow is Apple's canonical install path;
+        # it clears quarantine properly through Gatekeeper.
+        run: |
+          set -e
+          IDENTITY="Developer ID Application: Sourceful Labs AB (${APPLE_TEAM_ID})"
+          APP="build/Arc Transcriber.app"
+          DMG_NAME="Arc-Transcriber-${VERSION}-macos-arm64.dmg"
+          DMG="build/${DMG_NAME}"
+          STAGE="build/dmg-staging"
+
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -R "$APP" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+
+          hdiutil create \
+            -volname "Arc Transcriber" \
+            -srcfolder "$STAGE" \
+            -ov -format UDZO \
+            "$DMG"
+
+          codesign --force --sign "$IDENTITY" "$DMG"
+
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --team-id  "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+
+          xcrun stapler staple "$DMG"
+          spctl --assess --type install --verbose "$DMG"
+
+          echo "DMG_NAME=$DMG_NAME" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
           name: transcriber-macos
-          path: build/${{ env.ZIP_NAME }}
+          path: |
+            build/${{ env.ZIP_NAME }}
+            build/${{ env.DMG_NAME }}
 
   # ------------------------------------------------------------------
   # 3. Tag + create the GitHub Release with the built asset
@@ -260,6 +310,8 @@ jobs:
           tag_name: v${{ needs.check-release.outputs.version }}
           name: v${{ needs.check-release.outputs.version }} — ${{ needs.check-release.outputs.release_title }}
           body: ${{ needs.check-release.outputs.release_body }}
-          files: artifacts/*.zip
+          files: |
+            artifacts/*.zip
+            artifacts/*.dmg
           draft: false
           prerelease: false
