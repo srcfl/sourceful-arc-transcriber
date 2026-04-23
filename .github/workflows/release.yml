@@ -280,28 +280,9 @@ jobs:
           mkdir "$MOUNT/.background"
           cp Resources/dmg-background.png "$MOUNT/.background/background.png"
 
-          # 3. Finder layout — 640×400 window, icons at positions that
-          #    frame the background arrow.
-          osascript <<APPLESCRIPT
-          tell application "Finder"
-              tell disk "$VOL_NAME"
-                  open
-                  set current view of container window to icon view
-                  set toolbar visible of container window to false
-                  set statusbar visible of container window to false
-                  set the bounds of container window to {400, 150, 1040, 550}
-                  set viewOptions to the icon view options of container window
-                  set arrangement of viewOptions to not arranged
-                  set icon size of viewOptions to 128
-                  set background picture of viewOptions to file ".background:background.png"
-                  set position of item "Arc Transcriber.app" of container window to {128, 260}
-                  set position of item "Applications" of container window to {388, 260}
-                  update without registering applications
-                  delay 1
-                  close
-              end tell
-          end tell
-APPLESCRIPT
+          # 3. Finder layout — script lives in tools/ so the YAML
+          #    block doesn't have to deal with heredoc indentation.
+          osascript tools/dmg-layout.applescript "$VOL_NAME"
 
           # Flush and unmount
           sync
