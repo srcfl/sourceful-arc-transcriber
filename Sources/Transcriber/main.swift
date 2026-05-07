@@ -1,6 +1,8 @@
 import AppKit
 import AVFoundation
 import Combine
+import CoreGraphics
+import ScreenCaptureKit
 import SwiftUI
 import WhisperKit
 
@@ -295,11 +297,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // the laptop's room mic. Bypasses the menu-bar code path (which
             // always starts the mic) and goes straight to the system-audio
             // recorder. No mic permission, no live transcription, no diarization.
+            //
+            // On a fresh install Screen Recording is `.notDetermined` and the
+            // recorder's first SCShareableContent call would throw before TCC
+            // surfaces the prompt. Gate on the helper so the URL route fires
+            // the prompt itself instead of silently bailing.
             if isRecording {
                 FileHandle.standardError.write(Data("[URL] start-system: already recording, ignoring\n".utf8))
             } else {
                 FileHandle.standardError.write(Data("[URL] start-system\n".utf8))
-                startSystemAudioRecording()
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    let granted = await self.ensureScreenRecordingPermission()
+                    if granted {
+                        self.startSystemAudioRecording()
+                    } else {
+                        FileHandle.standardError.write(Data("[URL] start-system: screen recording permission not granted; bailing\n".utf8))
+                    }
+                }
             }
         case "stop":
             if isRecording {
@@ -517,6 +532,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    /// Ensures Screen Recording permission is granted before a system-audio
+    /// capture starts. `CGPreflightScreenCaptureAccess()` reads TCC without
+    /// triggering UI; if it's already true we're done. Otherwise we call
+    /// `SCShareableContent.current` once. On `.notDetermined` macOS surfaces
+    /// the permission prompt as a side effect; on `.denied` the call throws.
+    /// Either way we re-read the preflight afterwards and return that.
+    ///
+    /// Activates the app first so the prompt isn't hidden behind another
+    /// window. LSUIElement apps with no dock icon can otherwise miss it.
+    ///
+    /// Note: macOS binds a freshly granted Screen Recording permission to
+    /// the running process only after relaunch. The first prompt-and-allow
+    /// for a given build will still need a quit-and-relaunch before capture
+    /// works; subsequent launches read the grant directly. No clean way to
+    /// work around that from inside the app.
+    private func ensureScreenRecordingPermission() async -> Bool {
+        if CGPreflightScreenCaptureAccess() {
+            return true
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        do {
+            _ = try await SCShareableContent.current
+        } catch {
+            FileHandle.standardError.write(Data("[ScreenRec] SCShareableContent.current threw: \(error.localizedDescription)\n".utf8))
+        }
+        return CGPreflightScreenCaptureAccess()
     }
 
     /// System-audio-only recording. Mirrors `startRecording()` minus the mic
