@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var liveTranscriber: LiveTranscriber?
     private var isRecording = false
     private var isTranscribing = false
+    private var isSystemOnly = false
     private var micURL: URL?
     private var systemURL: URL?
     private var toggleItem: NSMenuItem!
@@ -205,9 +206,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     //
     // Two schemes handled here:
     //   * sourceful-transcriber://auth/callback?token=…  — Arc sign-in callback.
-    //   * transcriber://{start,stop,status}              — external control surface
+    //   * transcriber://{start,start-system,stop,status} — external control surface
     //     for Mira's calendar-watch → auto-record pipeline. `open transcriber://start`
     //     from any process (or shell) drives the same code paths the menu-bar items do.
+    //     `start-system` is the system-audio-only variant, used by the meeting-bot so
+    //     a meeting recording doesn't pick up the laptop's room mic.
     //
     // We register the kAEGetURL Apple Event handler explicitly as well as
     // implementing `application(_:open:)`. In plain-SwiftPM AppKit apps the
@@ -273,9 +276,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         note.runModal()
     }
 
-    /// Routes `transcriber://{start,stop,status}` to the same code paths the
-    /// menu-bar items use. Unknown hosts are logged and ignored so a typo
-    /// from `open transcriber://garbage` doesn't crash or surface UI.
+    /// Routes `transcriber://{start,start-system,stop,status}` to the same
+    /// code paths the menu-bar items use (where one exists; `start-system` is
+    /// URL-only). Unknown hosts are logged and ignored so a typo from
+    /// `open transcriber://garbage` doesn't crash or surface UI.
     private func handleControlURL(_ url: URL) {
         switch url.host {
         case "start":
@@ -284,6 +288,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 FileHandle.standardError.write(Data("[URL] start\n".utf8))
                 toggleRecording()
+            }
+        case "start-system":
+            // System-audio-only mode. Used by the meeting-bot orchestrator so a
+            // meeting recording captures clean meeting audio without picking up
+            // the laptop's room mic. Bypasses the menu-bar code path (which
+            // always starts the mic) and goes straight to the system-audio
+            // recorder. No mic permission, no live transcription, no diarization.
+            if isRecording {
+                FileHandle.standardError.write(Data("[URL] start-system: already recording, ignoring\n".utf8))
+            } else {
+                FileHandle.standardError.write(Data("[URL] start-system\n".utf8))
+                startSystemAudioRecording()
             }
         case "stop":
             if isRecording {
@@ -503,6 +519,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// System-audio-only recording. Mirrors `startRecording()` minus the mic
+    /// engine + live-transcription wiring. Triggered by `transcriber://start-system`
+    /// (meeting-bot pipeline); not exposed in the menu bar — the menu-bar
+    /// "Start Recording" item is unchanged.
+    private func startSystemAudioRecording() {
+        let folder = transcriptsFolder()
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        } catch {
+            alert("Could not create transcripts folder: \(error.localizedDescription)")
+            return
+        }
+
+        let stamp = timestamp()
+        let sysFile = folder.appendingPathComponent("recording-\(stamp)-system.caf")
+
+        // Flip the flags before kicking off the async start so `stopRecording`
+        // and `transcriber://status` see the right state immediately.
+        isRecording = true
+        isSystemOnly = true
+        micURL = nil
+        systemURL = nil
+        didCaptureSystemAudio = false
+        toggleItem.title = "Stop Recording"
+        setStatus("Recording (system audio)… starting")
+        updateIcon()
+        publishRecordingFlags()
+        startMeterPolling()
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            do {
+                try await self.systemAudio.start(to: sysFile)
+                await MainActor.run {
+                    self.systemURL = sysFile
+                    self.didCaptureSystemAudio = true
+                    self.setStatus("Recording (system audio)…")
+                }
+            } catch {
+                await MainActor.run {
+                    // System-only mode has no fallback. If permission's missing
+                    // there's nothing to capture, so unwind and surface it.
+                    self.systemURL = nil
+                    self.didCaptureSystemAudio = false
+                    self.isRecording = false
+                    self.isSystemOnly = false
+                    self.toggleItem.title = "Start Recording"
+                    self.setStatus("Idle (\(self.shortReason(error)))")
+                    self.updateIcon()
+                    self.publishRecordingFlags()
+                    self.stopMeterPolling()
+                    FileHandle.standardError.write(Data("[URL] start-system failed: \(error.localizedDescription)\n".utf8))
+                }
+            }
+        }
+    }
+
     private func shortReason(_ error: Error) -> String {
         if let f = error as? SystemAudioRecorder.Failure {
             switch f {
@@ -515,14 +588,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopRecording() {
-        mic.stop()
+        // Skip mic.stop() in system-only mode — the engine was never started.
+        if !isSystemOnly {
+            mic.stop()
+        }
         isRecording = false
         toggleItem.title = "Start Recording"
         updateIcon()
         publishRecordingFlags()
         stopMeterPolling()
 
-        guard let mic = micURL else {
+        let micFile = micURL
+        let sysFile = systemURL
+        let hadSystem = didCaptureSystemAudio
+        let wasSystemOnly = isSystemOnly
+        isSystemOnly = false
+
+        // Nothing captured — drop straight back to idle.
+        if micFile == nil && !hadSystem {
             liveTranscriber = nil
             state.liveText = ""
             setStatus("Idle")
@@ -530,8 +613,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         setStatus("Finalizing audio…")
-        let sys = systemURL
-        let hadSystem = didCaptureSystemAudio
         let live = liveTranscriber
 
         Task { [weak self] in
@@ -546,14 +627,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await MainActor.run {
                 self.liveTranscriber = nil
                 self.state.liveText = ""
-                self.transcribe(micURL: mic, systemURL: hadSystem ? sys : nil)
+                self.transcribe(
+                    micURL: wasSystemOnly ? nil : micFile,
+                    systemURL: hadSystem ? sysFile : nil
+                )
             }
         }
     }
 
     // MARK: - Transcription
 
-    private func transcribe(micURL: URL, systemURL: URL?) {
+    private func transcribe(micURL: URL?, systemURL: URL?) {
+        // Caller guarantees at least one of the two is non-nil.
+        guard micURL != nil || systemURL != nil else {
+            finishTranscribing()
+            return
+        }
+
         isTranscribing = true
         toggleItem.isEnabled = false
         updateIcon()
@@ -568,8 +658,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     live: false
                 )
 
-                await MainActor.run { self.setStatus("Transcribing mic…") }
-                let micResults = try await pipe.transcribe(audioPath: micURL.path, decodeOptions: options)
+                var micResults: [TranscriptionResult] = []
+                if let mic = micURL {
+                    await MainActor.run { self.setStatus("Transcribing mic…") }
+                    micResults = try await pipe.transcribe(audioPath: mic.path, decodeOptions: options)
+                }
 
                 var systemResults: [TranscriptionResult] = []
                 var usedSystemURL: URL?
@@ -580,36 +673,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
 
                 let body: String
-                if usedSystemURL != nil {
+                if micURL != nil, usedSystemURL != nil {
                     body = TranscriptMerger.merge(mic: micResults, system: systemResults)
-                } else if self.settings.speakerDiarization {
-                    await MainActor.run {
-                        self.setStatus("Identifying speakers…")
-                    }
-                    let turns = (try? await self.diarization.diarize(audioURL: micURL)) ?? []
-                    if turns.isEmpty {
+                } else if let mic = micURL {
+                    if self.settings.speakerDiarization {
+                        await MainActor.run {
+                            self.setStatus("Identifying speakers…")
+                        }
+                        let turns = (try? await self.diarization.diarize(audioURL: mic)) ?? []
+                        if turns.isEmpty {
+                            body = TranscriptMerger.formatSingleSpeaker(micResults).isEmpty
+                                ? "_(no speech detected)_"
+                                : TranscriptMerger.formatSingleSpeaker(micResults)
+                        } else {
+                            body = TranscriptMerger.mergeWithDiarization(whisper: micResults, turns: turns)
+                        }
+                    } else {
                         body = TranscriptMerger.formatSingleSpeaker(micResults).isEmpty
                             ? "_(no speech detected)_"
                             : TranscriptMerger.formatSingleSpeaker(micResults)
-                    } else {
-                        body = TranscriptMerger.mergeWithDiarization(whisper: micResults, turns: turns)
                     }
                 } else {
-                    body = TranscriptMerger.formatSingleSpeaker(micResults).isEmpty
+                    // System-audio only. No mic = no `You` channel, and
+                    // diarization is mic-only by design (see CLAUDE.md), so
+                    // this is a single-speaker dump of whatever the meeting
+                    // app played out.
+                    body = TranscriptMerger.formatSingleSpeaker(systemResults).isEmpty
                         ? "_(no speech detected)_"
-                        : TranscriptMerger.formatSingleSpeaker(micResults)
+                        : TranscriptMerger.formatSingleSpeaker(systemResults)
                 }
 
                 let allLangs = Array(Set((micResults + systemResults).map(\.language))).sorted()
                 let transcriptURL = try self.writeTranscript(
-                    basedOn: micURL,
-                    hasSystemAudio: usedSystemURL != nil,
+                    micURL: micURL,
+                    systemURL: usedSystemURL,
                     body: body,
                     detectedLanguages: allLangs
                 )
 
                 if !self.settings.keepAudioFiles {
-                    try? FileManager.default.removeItem(at: micURL)
+                    if let mic = micURL {
+                        try? FileManager.default.removeItem(at: mic)
+                    }
                     if let sys = systemURL {
                         try? FileManager.default.removeItem(at: sys)
                     }
@@ -874,26 +979,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func writeTranscript(
-        basedOn micURL: URL,
-        hasSystemAudio: Bool,
+        micURL: URL?,
+        systemURL: URL?,
         body: String,
         detectedLanguages: [String]
     ) throws -> URL {
-        // Strip the "-mic" suffix so transcripts are named `recording-<stamp>.md`.
-        let stem = micURL.deletingPathExtension().lastPathComponent
+        // Derive the transcript path from whichever audio file we have.
+        // For mic-led recordings we strip the "-mic" suffix; for system-only
+        // we strip "-system". Either way the markdown lands at
+        // `recording-<stamp>.md` next to the source audio.
+        let basis: URL = micURL ?? systemURL!
+        let stem = basis.deletingPathExtension().lastPathComponent
             .replacingOccurrences(of: "-mic", with: "")
-        let transcriptURL = micURL
+            .replacingOccurrences(of: "-system", with: "")
+        let transcriptURL = basis
             .deletingLastPathComponent()
             .appendingPathComponent("\(stem).md")
 
         let langLine = detectedLanguages.isEmpty ? "auto" : detectedLanguages.joined(separator: ", ")
         let sourceLine: String
-        if hasSystemAudio {
+        if micURL != nil && systemURL != nil {
             sourceLine = "mic + system audio"
-        } else if settings.speakerDiarization {
-            sourceLine = "mic only (diarized)"
+        } else if micURL != nil {
+            sourceLine = settings.speakerDiarization ? "mic only (diarized)" : "mic only"
         } else {
-            sourceLine = "mic only"
+            sourceLine = "system audio only"
         }
         let header = """
         # Transcript
