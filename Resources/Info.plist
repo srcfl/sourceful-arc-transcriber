@@ -41,6 +41,16 @@
                 <string>sourceful-transcriber</string>
             </array>
         </dict>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>io.srcful.transcriber.control</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>transcriber</string>
+            </array>
+        </dict>
     </array>
 </dict>
 </plist>
