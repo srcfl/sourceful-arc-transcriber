@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installCommaShortcut()
+        installURLEventHandler()
 
         state.onToggle = { [weak self] in self?.toggleRecording() }
         state.onShowTranscripts = { [weak self] in self?.showTranscripts() }
@@ -200,14 +201,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
-    // MARK: - URL scheme (sourceful-transcriber://auth/callback?token=…)
+    // MARK: - URL schemes
+    //
+    // Two schemes handled here:
+    //   * sourceful-transcriber://auth/callback?token=…  — Arc sign-in callback.
+    //   * transcriber://{start,stop,status}              — external control surface
+    //     for Mira's calendar-watch → auto-record pipeline. `open transcriber://start`
+    //     from any process (or shell) drives the same code paths the menu-bar items do.
+    //
+    // We register the kAEGetURL Apple Event handler explicitly as well as
+    // implementing `application(_:open:)`. In plain-SwiftPM AppKit apps the
+    // delegate path is the documented entry point and works in current macOS
+    // versions; the Apple Event handler is a belt-and-braces fallback for
+    // setups where LaunchServices delivers the URL through the older AE path.
+    // Both call into the same `handleIncomingURL` so the routing is identical
+    // either way.
+
+    private func installURLEventHandler() {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: urlString) else { return }
+        // Apple Event delivery isn't guaranteed to be on the main actor in a
+        // plain-SPM AppKit app; hop on before touching @MainActor state.
+        Task { @MainActor [weak self] in
+            self?.handleIncomingURL(url)
+        }
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls { handleIncomingURL(url) }
     }
 
     private func handleIncomingURL(_ url: URL) {
-        guard url.scheme == "sourceful-transcriber" else { return }
+        switch url.scheme {
+        case "sourceful-transcriber":
+            handleAuthURL(url)
+        case "transcriber":
+            handleControlURL(url)
+        default:
+            FileHandle.standardError.write(Data("[URL] ignoring unknown scheme: \(url)\n".utf8))
+        }
+    }
+
+    private func handleAuthURL(_ url: URL) {
         guard url.host == "auth" else { return }
 
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -227,6 +271,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         note.informativeText = "Connected as \(email). You can close the browser tab."
         note.alertStyle = .informational
         note.runModal()
+    }
+
+    /// Routes `transcriber://{start,stop,status}` to the same code paths the
+    /// menu-bar items use. Unknown hosts are logged and ignored so a typo
+    /// from `open transcriber://garbage` doesn't crash or surface UI.
+    private func handleControlURL(_ url: URL) {
+        switch url.host {
+        case "start":
+            if isRecording {
+                FileHandle.standardError.write(Data("[URL] start: already recording, ignoring\n".utf8))
+            } else {
+                FileHandle.standardError.write(Data("[URL] start\n".utf8))
+                toggleRecording()
+            }
+        case "stop":
+            if isRecording {
+                FileHandle.standardError.write(Data("[URL] stop\n".utf8))
+                toggleRecording()
+            } else {
+                FileHandle.standardError.write(Data("[URL] stop: not recording, ignoring\n".utf8))
+            }
+        case "status":
+            let state: String
+            if isRecording {
+                state = "recording"
+            } else if isTranscribing {
+                state = "transcribing"
+            } else {
+                state = "idle"
+            }
+            let micPath = micURL?.path ?? "-"
+            let sysPath = systemURL?.path ?? "-"
+            let line = "[URL] status: \(state) mic=\(micPath) system=\(sysPath)\n"
+            FileHandle.standardError.write(Data(line.utf8))
+        default:
+            let host = url.host ?? "(none)"
+            FileHandle.standardError.write(Data("[URL] unknown control host: \(host)\n".utf8))
+        }
     }
 
     // MARK: - Icon / UI
